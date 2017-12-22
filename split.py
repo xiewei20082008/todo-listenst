@@ -1,0 +1,2 @@
+from sound import *
+genSplitFile()
