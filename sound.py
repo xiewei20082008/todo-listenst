@@ -10,7 +10,7 @@ import signal
 import os
 from multiprocessing import Process, Value, Array, Queue
 
-
+fileName = sys.argv[1]
 chunks = []
 mode = "play_loop"
 index = 0
@@ -26,11 +26,14 @@ class Chunk:
 
 def loadChunks():
     global chunks, length
-    f = open("split.txt", "r")
-    for i in f:
-        (start, end) = i.split(" ")
-        chunk = Chunk(int(start), int(end))
-        chunks.append(chunk)
+    with open("split.txt", "r") as f
+        for i in f:
+            i = i.strip()
+            if not i:
+                continue
+            (start, end) = i.split(" ")
+            chunk = Chunk(int(start), int(end))
+            chunks.append(chunk)
     length = len(chunks)
 
 
@@ -41,7 +44,7 @@ def saveChunks():
 
 
 def genSplitFile():
-    sound = AudioSegment.from_mp3("a.mp3")
+    sound = AudioSegment.from_mp3(fileName)
     not_silence_ranges = detect_nonsilent(sound, 350, -36)
     keep_silence = 300
 
@@ -54,7 +57,7 @@ def genSplitFile():
 
 def play_process(chunks, index, mode, q):
     # os.close(sys.stderr.fileno())
-    sound = AudioSegment.from_mp3("a.mp3")
+    sound = AudioSegment.from_mp3(fileName)
     try:
         os.setsid()
     except:
