@@ -8,7 +8,10 @@ import threading
 import contextlib
 import signal
 import os
+import numpy as np
+from PIL import Image, ImageDraw
 from multiprocessing import Process, Value, Array, Queue
+import matplotlib.pyplot as plt
 
 
 
@@ -77,19 +80,58 @@ class Chunks(object):
         with open(os.path.splitext(self.fileName)[0]+".txt", "w") as f:
             for i in self.chunks:
                 f.write("{0} {1}\n".format(i[0], i[1]))
+    
+    def get_interval(self):
+        interval_size = 10
+        start = self.get_section_start()
+        end = self.get_section_end()
+        interval = list(np.arange(start, end, interval_size))
+        return list(zip(interval[:-1], interval[1:]))
 
 class PlayProcess(object):
     def __init__(self):
         fileName = sys.argv[1]
         self.sound = AudioSegment.from_mp3(fileName)
-    def play_chunks(self, chunks:Chunks, mode):
+        
+    def _get_bar_image(self, size, fill):
+        """ Returns an image of a bar. """
+        width, height = size
+        bar = Image.new('RGBA', size, fill)
+
+        end = Image.new('RGBA', (width, 2), fill)
+        draw = ImageDraw.Draw(end)
+        draw.point([(0, 0), (3, 0)], fill='#c1c1c1')
+        draw.point([(0, 1), (3, 1), (1, 0), (2, 0)], fill='#555555')
+
+        bar.paste(end, (0, 0))
+        bar.paste(end.rotate(180), (0, height - 2))
+        return bar
+
+    def draw_wave(self, chunks:Chunks):
+        interval = chunks.get_interval()
+        loudness = list(map(lambda x: self.sound[x[0]:x[1]].rms, interval))
+        max_rms = max(loudness)
+        loudness_std = map(lambda x: int(x/max_rms*60), loudness)
+
+        im = Image.new('RGB', (840, 128), '#f5f5f5')
+        for index, value in enumerate(loudness_std, start=0):
+            column = index * 2 + 2
+            upper_endpoint = 64 - value
+            im.paste(self._get_bar_image((4, value * 2), '#424242'), (column, upper_endpoint))
+
+        arr = np.asarray(im)
+        plt.imshow(arr)
+
+    def play_chunks(self, chunks:Chunks, mode, is_draw_wave=False):
         try:
             os.setsid()
         except:
             pass
-
         def play_thread():
+            if is_draw_wave:
+                self.draw_wave(chunks)
             while(True):
+                print("play onetime")
                 play(self.sound[chunks.get_section_start():chunks.get_section_end()])
 
                 if mode == "play_once":
@@ -116,12 +158,12 @@ if __name__ == "__main__":
     t.start()
     lastChunks = None
 
-    def restartProcess(t):
+    def restartProcess(t, is_draw_wave=False):
         try:
             os.killpg(os.getpgid(t.pid), signal.SIGTERM)
         except:
             os.kill(t.pid, signal.SIGTERM)
-        t = Process(target=play_process.play_chunks, args=(copy.deepcopy(c), mode))
+        t = Process(target=play_process.play_chunks, args=(copy.deepcopy(c), mode, is_draw_wave))
         t.start()
         return t
 
@@ -135,6 +177,9 @@ if __name__ == "__main__":
             mode = 'play_once'
             print('alter to once mode')
             t = restartProcess(t)
+        elif value == 'p':
+            print('paint the wave')
+            t = restartProcess(t, is_draw_wave=True)
         elif value == 'd':
             c.delete()
             print('delete a sentence')
