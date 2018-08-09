@@ -8,10 +8,11 @@ import threading
 import signal
 import os
 import numpy as np
-from multiprocessing import Process
+from multiprocessing import Process, Queue
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation 
 from datetime import datetime
+import time
 
 
 def genSplitFile():
@@ -53,9 +54,8 @@ class Chunks(object):
         self.chunks[self.index][1] = self.chunks[self.index+1][1]
         del self.chunks[self.index+1]
 
-    def insert(self,break_diff):
+    def insert(self, middle_time):
         print("start is", self.chunks[self.index][0])
-        middle_time = self.chunks[self.index][0] + break_diff
         print("middle is", middle_time)
         end_time = self.chunks[self.index][1]
         print("end is", end_time)
@@ -111,7 +111,14 @@ class PlayProcess(object):
     def data_gen(self): 
         while True: 
             diff = datetime.now() - self.progress_start 
-            yield [0, diff.total_seconds()*1000.0]
+            yield [self.x_axis[0], self.x_axis[0]+diff.total_seconds()*1000.0]
+    def onclick(self, event):
+        print('%s click: button=%d, x=%d, y=%d, xdata=%f, ydata=%f' %
+            ('double' if event.dblclick else 'single', event.button,
+            event.x, event.y, event.xdata, event.ydata))
+        print("putting into the queue", int(event.xdata))
+        self.queue.put(int(event.xdata))
+        
 
     def draw_wave(self, chunks:Chunks):
         fig = plt.figure() 
@@ -120,8 +127,7 @@ class PlayProcess(object):
         max_rms = max(loudness)
         loudness_std = list(map(lambda x: int(x/max_rms*480), loudness))
 
-        base = interval[0][0]
-        self.x_axis = map(lambda x: x[0]-base, interval)
+        self.x_axis = map(lambda x: x[0], interval)
         self.x_axis = list(self.x_axis)
         # print("loudness std is \n", loudness_std)
         # print("x_axis is\n", self.x_axis)
@@ -129,14 +135,15 @@ class PlayProcess(object):
         plt.title("audio wave")
         
         self.line, = plt.plot([0, 0],"r")
-        # plt.xlim([self.x_axis[0], self.x_axis[-1]])
+        plt.xlim([self.x_axis[0], self.x_axis[-1]])
         plt.ylim([0,500])
         ani = animation.FuncAnimation(fig, self.update, self.data_gen, interval=50)
+        fig.canvas.mpl_connect('button_press_event', self.onclick)
 
         plt.show()
         print("draw wave stop")
 
-    def play_chunks(self, chunks:Chunks, mode, is_draw_wave=False):
+    def play_chunks(self, chunks:Chunks, mode, is_draw_wave=False ,queue:Queue=None):
         try:
             os.setsid()
         except:
@@ -144,7 +151,6 @@ class PlayProcess(object):
 
         def play_thread():
             while(True):
-                print("play onetime")
                 self.progress_start = datetime.now()
                 play(self.sound[chunks.get_section_start():chunks.get_section_end()])
 
@@ -153,6 +159,7 @@ class PlayProcess(object):
                 if mode == "play_loop":
                     pass
 
+        self.queue = queue
         t = threading.Thread(target=play_thread)
         t.setDaemon(False)
         t.start()
@@ -169,6 +176,7 @@ if __name__ == "__main__":
 
     c = Chunks()
     c.load()
+    queue = Queue()
     play_process = PlayProcess()
 
     t = Process(target=play_process.play_chunks, args=(copy.deepcopy(c),mode))
@@ -181,9 +189,25 @@ if __name__ == "__main__":
             os.killpg(os.getpgid(t.pid), signal.SIGTERM)
         except:
             os.kill(t.pid, signal.SIGTERM)
-        t = Process(target=play_process.play_chunks, args=(copy.deepcopy(c), mode, is_draw_wave))
+        t = Process(target=play_process.play_chunks, args=(copy.deepcopy(c),mode,is_draw_wave,queue))
         t.start()
         return t
+
+    def wait_insert_break():
+        global t, lastChunks
+        while True:
+            value = queue.get()
+            print("get queue with", value)
+            if value==0:
+                break
+            print("get queue with", value)
+            lastChunks = copy.deepcopy(c)
+            c.insert(value)
+            t = restartProcess(t)
+        print("thread exit!")
+
+    insert_thread = threading.Thread(target=wait_insert_break)
+    insert_thread.start()
 
     while(True):
         value = input()
@@ -224,6 +248,7 @@ if __name__ == "__main__":
             if(len(s))!=2:
                 print("insert param error")
                 continue
+            lastChunks = copy.deepcopy(c)
             c.insert(int(s[1]))
             t = restartProcess(t)
             print('insert a new break')
@@ -243,8 +268,16 @@ if __name__ == "__main__":
             t = restartProcess(t)
         elif value == 'q':
             try:
+                # queue get 0 means the thread need to stop
+                # print("putting 0 to queue")
+                queue.put(0)
+                # print("trying to join thread")
+                insert_thread.join()
+                # print("trying kill pg")
                 os.killpg(os.getpgid(t.pid), signal.SIGTERM)
-            except:
+                # print("after kill pg")
+            except Exception as e:
+                print(e)
                 os.kill(t.pid, signal.SIGTERM)
             break
 
