@@ -111,7 +111,7 @@ class PlayProcess(object):
     def data_gen(self): 
         while True: 
             diff = datetime.now() - self.progress_start 
-            yield [self.x_axis[0], self.x_axis[0]+diff.total_seconds()*1000.0]
+            yield [0, diff.total_seconds()*1000.0]
 
     def draw_wave(self, chunks:Chunks):
         fig = plt.figure() 
@@ -120,7 +120,8 @@ class PlayProcess(object):
         max_rms = max(loudness)
         loudness_std = list(map(lambda x: int(x/max_rms*480), loudness))
 
-        self.x_axis = map(lambda x: x[0], interval)
+        base = interval[0][0]
+        self.x_axis = map(lambda x: x[0]-base, interval)
         self.x_axis = list(self.x_axis)
         # print("loudness std is \n", loudness_std)
         # print("x_axis is\n", self.x_axis)
@@ -128,7 +129,7 @@ class PlayProcess(object):
         plt.title("audio wave")
         
         self.line, = plt.plot([0, 0],"r")
-        plt.xlim([self.x_axis[0], self.x_axis[-1]])
+        # plt.xlim([self.x_axis[0], self.x_axis[-1]])
         plt.ylim([0,500])
         ani = animation.FuncAnimation(fig, self.update, self.data_gen, interval=50)
 
