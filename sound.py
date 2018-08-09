@@ -5,12 +5,10 @@ from pydub.playback import play
 import copy
 import sys
 import threading
-import contextlib
 import signal
 import os
 import numpy as np
-from PIL import Image, ImageDraw
-from multiprocessing import Process, Value, Array, Queue
+from multiprocessing import Process
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation 
 from datetime import datetime
@@ -106,21 +104,6 @@ class PlayProcess(object):
         self.progress_start = datetime.now()
         self.line = None
         
-    def _get_bar_image(self, size, fill):
-        """ Returns an image of a bar. """
-        width, height = size
-        bar = Image.new('RGBA', size, fill)
-
-        end = Image.new('RGBA', (width, 2), fill)
-        draw = ImageDraw.Draw(end)
-        draw.point([(0, 0), (3, 0)], fill='#c1c1c1')
-        draw.point([(0, 1), (3, 1), (1, 0), (2, 0)], fill='#555555')
-
-        bar.paste(end, (0, 0))
-        bar.paste(end.rotate(180), (0, height - 2))
-        return bar
-
-
     def update(self,data): 
         self.line.set_ydata([20,20]) 
         self.line.set_xdata(data)
@@ -128,30 +111,27 @@ class PlayProcess(object):
     def data_gen(self): 
         while True: 
             diff = datetime.now() - self.progress_start 
-            yield [0, diff.total_seconds()*1000.0]
+            yield [self.x_axis[0], self.x_axis[0]+diff.total_seconds()*1000.0]
 
     def draw_wave(self, chunks:Chunks):
         fig = plt.figure() 
         interval = chunks.get_interval()
         loudness = list(map(lambda x: self.sound[x[0]:x[1]].rms, interval))
         max_rms = max(loudness)
-        loudness_std = map(lambda x: int(x/max_rms*480), loudness)
+        loudness_std = list(map(lambda x: int(x/max_rms*480), loudness))
 
-        im = Image.new('RGB',
-            (chunks.get_section_end() - chunks.get_section_start(), 1024), '#f5f5f5')
-        for index, value in enumerate(loudness_std, start=0):
-            column = index * 10
-            upper_endpoint = 512 - value
-            im.paste(self._get_bar_image((10, value * 2), '#424242'), (column, upper_endpoint))
-        # index = np.arange(len) 
-        # plt.bar(index,)
-
-        arr = np.asarray(im)
-
-        self.line, = plt.plot([0.2,1],"r") 
+        self.x_axis = map(lambda x: x[0], interval)
+        self.x_axis = list(self.x_axis)
+        # print("loudness std is \n", loudness_std)
+        # print("x_axis is\n", self.x_axis)
+        plt.plot(self.x_axis, loudness_std)
+        plt.title("audio wave")
+        
+        self.line, = plt.plot([0, 0],"r")
+        plt.xlim([self.x_axis[0], self.x_axis[-1]])
+        plt.ylim([0,500])
         ani = animation.FuncAnimation(fig, self.update, self.data_gen, interval=50)
 
-        plt.imshow(arr)
         plt.show()
         print("draw wave stop")
 
@@ -160,11 +140,8 @@ class PlayProcess(object):
             os.setsid()
         except:
             pass
+
         def play_thread():
-            if is_draw_wave:
-                t = threading.Thread(target=self.draw_wave,args=(chunks,))
-                t.start()
-                # self.draw_wave(chunks)
             while(True):
                 print("play onetime")
                 self.progress_start = datetime.now()
@@ -178,7 +155,11 @@ class PlayProcess(object):
         t = threading.Thread(target=play_thread)
         t.setDaemon(False)
         t.start()
+        if is_draw_wave:
+            self.draw_wave(chunks)
+
         t.join()
+
 
         print('subprocess end')
 
