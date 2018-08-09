@@ -12,7 +12,8 @@ import numpy as np
 from PIL import Image, ImageDraw
 from multiprocessing import Process, Value, Array, Queue
 import matplotlib.pyplot as plt
-
+import matplotlib.animation as animation 
+from datetime import datetime
 
 
 def genSplitFile():
@@ -54,6 +55,16 @@ class Chunks(object):
         self.chunks[self.index][1] = self.chunks[self.index+1][1]
         del self.chunks[self.index+1]
 
+    def insert(self,break_diff):
+        print("start is", self.chunks[self.index][0])
+        middle_time = self.chunks[self.index][0] + break_diff
+        print("middle is", middle_time)
+        end_time = self.chunks[self.index][1]
+        print("end is", end_time)
+        self.chunks[self.index][1] = middle_time
+        self.chunks.insert(self.index+1, [middle_time, end_time])
+
+
     def get_section_start(self):
         return self.chunks[self.index][0]
 
@@ -92,6 +103,8 @@ class PlayProcess(object):
     def __init__(self):
         fileName = sys.argv[1]
         self.sound = AudioSegment.from_mp3(fileName)
+        self.progress_start = datetime.now()
+        self.line = None
         
     def _get_bar_image(self, size, fill):
         """ Returns an image of a bar. """
@@ -107,20 +120,40 @@ class PlayProcess(object):
         bar.paste(end.rotate(180), (0, height - 2))
         return bar
 
+
+    def update(self,data): 
+        self.line.set_ydata([20,20]) 
+        self.line.set_xdata(data)
+        return self.line, 
+    def data_gen(self): 
+        while True: 
+            diff = datetime.now() - self.progress_start 
+            yield [0, diff.total_seconds()*1000.0]
+
     def draw_wave(self, chunks:Chunks):
+        fig = plt.figure() 
         interval = chunks.get_interval()
         loudness = list(map(lambda x: self.sound[x[0]:x[1]].rms, interval))
         max_rms = max(loudness)
-        loudness_std = map(lambda x: int(x/max_rms*60), loudness)
+        loudness_std = map(lambda x: int(x/max_rms*480), loudness)
 
-        im = Image.new('RGB', (840, 128), '#f5f5f5')
+        im = Image.new('RGB',
+            (chunks.get_section_end() - chunks.get_section_start(), 1024), '#f5f5f5')
         for index, value in enumerate(loudness_std, start=0):
-            column = index * 2 + 2
-            upper_endpoint = 64 - value
-            im.paste(self._get_bar_image((4, value * 2), '#424242'), (column, upper_endpoint))
+            column = index * 10
+            upper_endpoint = 512 - value
+            im.paste(self._get_bar_image((10, value * 2), '#424242'), (column, upper_endpoint))
+        # index = np.arange(len) 
+        # plt.bar(index,)
 
         arr = np.asarray(im)
+
+        self.line, = plt.plot([0.2,1],"r") 
+        ani = animation.FuncAnimation(fig, self.update, self.data_gen, interval=50)
+
         plt.imshow(arr)
+        plt.show()
+        print("draw wave stop")
 
     def play_chunks(self, chunks:Chunks, mode, is_draw_wave=False):
         try:
@@ -129,9 +162,12 @@ class PlayProcess(object):
             pass
         def play_thread():
             if is_draw_wave:
-                self.draw_wave(chunks)
+                t = threading.Thread(target=self.draw_wave,args=(chunks,))
+                t.start()
+                # self.draw_wave(chunks)
             while(True):
                 print("play onetime")
+                self.progress_start = datetime.now()
                 play(self.sound[chunks.get_section_start():chunks.get_section_end()])
 
                 if mode == "play_once":
@@ -201,6 +237,14 @@ if __name__ == "__main__":
             c.next()
             t = restartProcess(t)
             print('next sentence')
+        elif value.startswith('i'):
+            s = value.split()
+            if(len(s))!=2:
+                print("insert param error")
+                continue
+            c.insert(int(s[1]))
+            t = restartProcess(t)
+            print('insert a new break')
         elif value == 'b':
             c.pre()
             print('previous sentence')
