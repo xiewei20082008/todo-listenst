@@ -8,6 +8,7 @@ import threading
 import signal
 import os
 import numpy as np
+import kthread
 from multiprocessing import Process, Queue
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation 
@@ -108,16 +109,21 @@ class PlayProcess(object):
         self.line.set_ydata([20,20]) 
         self.line.set_xdata(data)
         return self.line, 
+
     def data_gen(self): 
         while True: 
             diff = datetime.now() - self.progress_start 
             yield [self.x_axis[0], self.x_axis[0]+diff.total_seconds()*1000.0]
+
     def onclick(self, event):
         print('%s click: button=%d, x=%d, y=%d, xdata=%f, ydata=%f' %
             ('double' if event.dblclick else 'single', event.button,
             event.x, event.y, event.xdata, event.ydata))
-        print("putting into the queue", int(event.xdata))
-        self.queue.put(int(event.xdata))
+
+        value = int(event.xdata)
+        print("insert point:", value)
+        self.c.insert(value)
+        self.t_play.kill()
         
 
     def draw_wave(self, chunks:Chunks):
@@ -142,142 +148,105 @@ class PlayProcess(object):
 
         plt.show()
         print("draw wave stop")
+    
+    def cmd_solver(self):
+        while True:
+            value = self.queue.get()
+            print("Received cmd: ",value)
+            if value == 'l':
+                self.mode = 'play_loop'
+                print('alter to loop mode')
+                self.t_play.kill()
+            elif value == 'o':
+                self.mode = 'play_once'
+                print('alter to once mode')
+                self.t_play.kill()
+            elif value == 'p':
+                print('paint the wave')
+                self.is_draw_wave = True
+                self.t_play.kill()
+            elif value == 'd':
+                self.c.delete()
+                print('delete a sentence')
+                self.t_play.kill()
+            elif value =='c':
+                self.c.combine()
+                print('conbine chunks')
+                self.t_play.kill()
+            elif value == 's':
+                self.c.save()
+                print('save chunks')
+            elif value == 'n':
+                self.c.next()
+                self.t_play.kill()
+                print('next sentence')
+            elif value == 'b':
+                self.c.pre()
+                print('previous sentence')
+                self.t_play.kill()
+            elif value == 'q':
+                try:
+                    self.t_play.kill()
+                    exit()
+                except Exception as e:
+                    print(e)
+                break
 
-    def play_chunks(self, chunks:Chunks, mode, is_draw_wave=False ,queue:Queue=None):
+
+    def play_thread(self):
+        while(True):
+            self.progress_start = datetime.now()
+            play(self.sound[self.c.get_section_start():self.c.get_section_end()])
+
+            if self.mode == "play_once":
+                self.c.next()
+            if self.mode == "play_loop":
+                pass
+
+    def play_chunks(self, queue:Queue):
+        print("in play chunks: the main func of the child process")
         try:
             os.setsid()
         except:
             pass
 
-        def play_thread():
-            while(True):
-                self.progress_start = datetime.now()
-                play(self.sound[chunks.get_section_start():chunks.get_section_end()])
-
-                if mode == "play_once":
-                    chunks.next()
-                if mode == "play_loop":
-                    pass
-
+        self.mode = "play_loop"
+        self.c = Chunks()
+        self.c.load()
         self.queue = queue
-        t = threading.Thread(target=play_thread)
-        t.setDaemon(False)
-        t.start()
-        if is_draw_wave:
-            self.draw_wave(chunks)
+        self.is_draw_wave = False
 
-        t.join()
+        self.t_cmd_solver = threading.Thread(target=self.cmd_solver)
+        self.t_cmd_solver.setDaemon(False)
+        self.t_cmd_solver.start()
+        
+        print("cmd solver thread started")
+
+        while True:
+            self.t_play = kthread.KThread(target=self.play_thread)
+            print("create a new thread")
+            self.t_play.setDaemon(False)
+            self.t_play.start()
+            if self.is_draw_wave:
+                self.draw_wave(self.c)
+                self.is_draw_wave = False
+
+            self.t_play.join()
 
 
         print('subprocess end')
 
 if __name__ == "__main__":
-    mode = "play_loop"
 
-    c = Chunks()
-    c.load()
     queue = Queue()
     play_process = PlayProcess()
 
-    t = Process(target=play_process.play_chunks, args=(copy.deepcopy(c),mode))
+    t = Process(target=play_process.play_chunks, args=(queue,))
     t.daemon = False
     t.start()
-    lastChunks = None
 
-    def restartProcess(t, is_draw_wave=False):
-        try:
-            os.killpg(os.getpgid(t.pid), signal.SIGTERM)
-        except:
-            os.kill(t.pid, signal.SIGTERM)
-        t = Process(target=play_process.play_chunks, args=(copy.deepcopy(c),mode,is_draw_wave,queue))
-        t.start()
-        return t
-
-    def wait_insert_break():
-        global t, lastChunks
-        while True:
-            value = queue.get()
-            print("get queue with", value)
-            if value==0:
-                break
-            print("get queue with", value)
-            lastChunks = copy.deepcopy(c)
-            c.insert(value)
-            t = restartProcess(t)
-        print("thread exit!")
-
-    insert_thread = threading.Thread(target=wait_insert_break)
-    insert_thread.start()
-
+    print("Process started! Waiting for command!")
     while(True):
         value = input()
-        if value == 'l':
-            mode = 'play_loop'
-            print('alter to loop mode')
-            t = restartProcess(t)
-        elif value == 'o':
-            mode = 'play_once'
-            print('alter to once mode')
-            t = restartProcess(t)
-        elif value == 'p':
-            print('paint the wave')
-            t = restartProcess(t, is_draw_wave=True)
-        elif value == 'd':
-            c.delete()
-            print('delete a sentence')
-            t = restartProcess(t)
-        elif value == 'r':
-            if lastChunks:
-                c = lastChunks
-                print('resume chunks')
-            t = restartProcess(t)
-        elif value =='c':
-            lastChunks = copy.deepcopy(c)
-            c.combine()
-            print('conbine chunks')
-            t = restartProcess(t)
-        elif value == 's':
-            c.save()
-            print('save chunks')
-        elif value == 'n':
-            c.next()
-            t = restartProcess(t)
-            print('next sentence')
-        elif value.startswith('i'):
-            s = value.split()
-            if(len(s))!=2:
-                print("insert param error")
-                continue
-            lastChunks = copy.deepcopy(c)
-            c.insert(int(s[1]))
-            t = restartProcess(t)
-            print('insert a new break')
-        elif value == 'b':
-            c.pre()
-            print('previous sentence')
-            t = restartProcess(t)
-        elif value.startswith('z'):
-            s = value.split()
-            c.section_start_tweak(int(s[1]))
-            print('start time change %s' % str(s[1]))
-            t = restartProcess(t)
-        elif value.startswith('x'):
-            s = value.split()
-            c.section_end_tweak(int(s[1]))
-            print('end time change %s' % str(s[1]))
-            t = restartProcess(t)
-        elif value == 'q':
-            try:
-                # queue get 0 means the thread need to stop
-                # print("putting 0 to queue")
-                queue.put(0)
-                # print("trying to join thread")
-                insert_thread.join()
-                # print("trying kill pg")
-                os.killpg(os.getpgid(t.pid), signal.SIGTERM)
-                # print("after kill pg")
-            except Exception as e:
-                print(e)
-                os.kill(t.pid, signal.SIGTERM)
-            break
+        queue.put(value)
 
